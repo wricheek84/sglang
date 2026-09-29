@@ -4102,6 +4102,58 @@ class TestLazyReexports(CustomTestCase):
         with self.assertRaises(AttributeError):
             server_args_module.NotAThing
 
+class TestDeepSeekV4DefaultsHook(CustomTestCase):
+    """Tests for apply_deepseek_v4_defaults algorithm validation and topk enforcement."""
 
+    def _run_hook(self, **cfg_overrides):
+        from unittest.mock import MagicMock, patch
+        from sglang.srt.arg_groups.deepseek_v4_hook import apply_deepseek_v4_defaults
+
+        defaults = dict(
+            dsv4_attn_backend="standard",
+            max_running_requests=256,
+            speculative_algorithm=None,
+            speculative_eagle_topk=1,
+            enable_hisparse=False,
+            disaggregation_mode="null",
+        )
+        defaults.update(cfg_overrides)
+        cfg = MagicMock(**defaults)
+
+        with patch(
+            "sglang.srt.arg_groups.deepseek_v4_hook.resolving_view", return_value=cfg
+        ), patch("sglang.srt.arg_groups.deepseek_v4_hook.run_post_process_pass"):
+            apply_deepseek_v4_defaults(MagicMock(), "DeepseekV4ForCausalLM")
+
+    def test_no_speculative_algorithm_is_a_noop(self):
+        """speculative_algorithm=None skips validation entirely."""
+        self._run_hook(speculative_algorithm=None)
+
+    def test_eagle_accepted_case_insensitively(self):
+        """EAGLE is accepted in any input casing when topk == 1."""
+        for algo in ("EAGLE", "eagle", "Eagle"):
+            with self.subTest(algo=algo):
+                self._run_hook(speculative_algorithm=algo, speculative_eagle_topk=1)
+
+    def test_eagle_rejects_topk_other_than_one(self):
+        """EAGLE with topk != 1 raises, regardless of input casing."""
+        for algo in ("EAGLE", "eagle"):
+            with self.subTest(algo=algo):
+                with self.assertRaisesRegex(AssertionError, "topk == 1"):
+                    self._run_hook(speculative_algorithm=algo, speculative_eagle_topk=2)
+
+    def test_dspark_accepted_case_insensitively(self):
+        """DSPARK is accepted in any input casing; topk is not checked for DSPARK."""
+        for algo in ("DSPARK", "dspark", "Dspark"):
+            with self.subTest(algo=algo):
+                self._run_hook(speculative_algorithm=algo)
+
+    def test_unsupported_algorithm_rejected(self):
+        """Any algorithm outside EAGLE/DSPARK raises, case-insensitively."""
+        for algo in ("MEDUSA", "medusa"):
+            with self.subTest(algo=algo):
+                with self.assertRaisesRegex(AssertionError, "Only EAGLE and DSPARK"):
+                    self._run_hook(speculative_algorithm=algo)
+                    
 if __name__ == "__main__":
     unittest.main()
