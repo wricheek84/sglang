@@ -2523,6 +2523,17 @@ class TestPipelineParallelCompat(CustomTestCase):
     def test_dspark_pd_prefill_does_not_require_eagle_architecture(self):
         check_pipeline_parallel_compat(self._cfg(speculative_algorithm="DSPARK"))
 
+    def test_dspark_case_insensitive(self):
+        for algo in ("DSPARK", "dspark", "Dspark"):
+            with self.subTest(algo=algo):
+                check_pipeline_parallel_compat(self._cfg(speculative_algorithm=algo))
+                with self.assertRaisesRegex(AssertionError, "DSPARK.*prefill"):
+                    check_pipeline_parallel_compat(
+                        self._cfg(
+                            speculative_algorithm=algo, disaggregation_mode="decode"
+                        )
+                    )
+
     def test_dspark_is_rejected_outside_pd_prefill(self):
         for mode in ("decode", "null"):
             with self.subTest(mode=mode):
@@ -4117,6 +4128,246 @@ class TestLazyReexports(CustomTestCase):
     def test_an_unknown_attribute_still_raises(self):
         with self.assertRaises(AttributeError):
             server_args_module.NotAThing
+
+
+class TestDeepSeekV4DefaultsHook(CustomTestCase):
+    """Tests for apply_deepseek_v4_defaults algorithm validation and topk enforcement."""
+
+    def _run_hook(self, **cfg_overrides):
+        from unittest.mock import MagicMock, patch
+
+        from sglang.srt.arg_groups.deepseek_v4_hook import apply_deepseek_v4_defaults
+
+        defaults = dict(
+            dsv4_attn_backend="standard",
+            max_running_requests=256,
+            speculative_algorithm=None,
+            speculative_eagle_topk=1,
+            enable_hisparse=False,
+            disaggregation_mode="null",
+        )
+        defaults.update(cfg_overrides)
+        cfg = MagicMock(**defaults)
+
+        with (
+            patch(
+                "sglang.srt.arg_groups.deepseek_v4_hook.resolving_view",
+                return_value=cfg,
+            ),
+            patch("sglang.srt.arg_groups.deepseek_v4_hook.run_post_process_pass"),
+        ):
+            apply_deepseek_v4_defaults(MagicMock(), "DeepseekV4ForCausalLM")
+
+    def test_no_speculative_algorithm_is_a_noop(self):
+        """speculative_algorithm=None skips validation entirely."""
+        self._run_hook(speculative_algorithm=None)
+
+    def test_eagle_accepted_case_insensitively(self):
+        """EAGLE is accepted in any input casing when topk == 1."""
+        for algo in ("EAGLE", "eagle", "Eagle"):
+            with self.subTest(algo=algo):
+                self._run_hook(speculative_algorithm=algo, speculative_eagle_topk=1)
+
+    def test_eagle_rejects_topk_other_than_one(self):
+        """EAGLE with topk != 1 raises, regardless of input casing."""
+        for algo in ("EAGLE", "eagle"):
+            with self.subTest(algo=algo):
+                with self.assertRaisesRegex(AssertionError, "topk == 1"):
+                    self._run_hook(speculative_algorithm=algo, speculative_eagle_topk=2)
+
+    def test_dspark_accepted_case_insensitively(self):
+        """DSPARK is accepted in any input casing; topk is not checked for DSPARK."""
+        for algo in ("DSPARK", "dspark", "Dspark"):
+            with self.subTest(algo=algo):
+                self._run_hook(speculative_algorithm=algo)
+
+    def test_unsupported_algorithm_rejected(self):
+        """Any algorithm outside EAGLE/DSPARK raises, case-insensitively."""
+        for algo in ("MEDUSA", "medusa"):
+            with self.subTest(algo=algo):
+                with self.assertRaisesRegex(AssertionError, "Only EAGLE and DSPARK"):
+                    self._run_hook(speculative_algorithm=algo)
+
+
+import unittest
+from unittest.mock import MagicMock, patch
+
+
+class TestKimiK3SpecBackendDefaults(CustomTestCase):
+    """Tests for apply_kimi_k3_spec_backend_defaults."""
+
+    def _run_hook(self, is_sm100=True, **cfg_overrides):
+        from sglang.srt.arg_groups.kimi_k3_hook import (
+            apply_kimi_k3_spec_backend_defaults,
+        )
+
+        defaults = dict(
+            speculative_algorithm=None,
+            linear_attn_verify_backend=None,
+            speculative_draft_attention_backend=None,
+        )
+        defaults.update(cfg_overrides)
+        cfg = MagicMock(**defaults)
+        mock_platform = MagicMock(is_sm100=is_sm100)
+        mock_declare = MagicMock()
+
+        with (
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.resolving_view", return_value=cfg
+            ),
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.declare_resolution", mock_declare
+            ),
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.get_platform",
+                return_value=mock_platform,
+            ),
+        ):
+            apply_kimi_k3_spec_backend_defaults(MagicMock())
+
+        return mock_declare
+
+    @staticmethod
+    def _resolved_fields(mock_declare):
+        """Flatten every declare_resolution(...) call's kwargs into one dict."""
+        fields = {}
+        for call in mock_declare.call_args_list:
+            fields.update(call.kwargs)
+        return fields
+
+    def test_no_speculative_algorithm_is_a_noop(self):
+        mock_declare = self._run_hook(speculative_algorithm=None)
+        mock_declare.assert_not_called()
+
+    def test_draft_attention_backend_case_insensitive_for_dspark(self):
+        """DSPARK in any input casing triggers the trtllm_mha default on SM100."""
+        for algo in ("DSPARK", "dspark", "Dspark"):
+            with self.subTest(algo=algo):
+                mock_declare = self._run_hook(
+                    speculative_algorithm=algo,
+                    speculative_draft_attention_backend=None,
+                    is_sm100=True,
+                )
+                fields = self._resolved_fields(mock_declare)
+                self.assertEqual(
+                    fields.get("speculative_draft_attention_backend"), "trtllm_mha"
+                )
+
+    def test_non_dspark_algorithm_does_not_set_draft_backend(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="EAGLE",
+            speculative_draft_attention_backend=None,
+            is_sm100=True,
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertNotIn("speculative_draft_attention_backend", fields)
+
+    def test_dspark_draft_backend_skipped_off_sm100(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="DSPARK",
+            speculative_draft_attention_backend=None,
+            is_sm100=False,
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertNotIn("speculative_draft_attention_backend", fields)
+
+    def test_dspark_does_not_override_explicit_draft_backend(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="DSPARK",
+            speculative_draft_attention_backend="flashinfer",
+            is_sm100=True,
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertNotIn("speculative_draft_attention_backend", fields)
+
+    def test_verify_backend_defaults_to_nv_cutedsl(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="EAGLE", linear_attn_verify_backend=None
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertEqual(fields.get("linear_attn_verify_backend"), "nv_cutedsl")
+
+    def test_verify_backend_not_overridden_if_already_set(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="EAGLE",
+            linear_attn_verify_backend="some_other_backend",
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertNotIn("linear_attn_verify_backend", fields)
+
+
+class TestKimiK3LinearAttnDefaults(CustomTestCase):
+    """Tests for apply_kimi_k3_linear_attn_defaults."""
+
+    def _run_hook(self, is_sm100=True, **cfg_overrides):
+        from sglang.srt.arg_groups.kimi_k3_hook import (
+            apply_kimi_k3_linear_attn_defaults,
+        )
+
+        defaults = dict(
+            linear_attn_decode_backend=None,
+            mamba_ssm_dtype="bfloat16",
+        )
+        defaults.update(cfg_overrides)
+        cfg = MagicMock(**defaults)
+        mock_platform = MagicMock(is_sm100=is_sm100)
+        mock_declare = MagicMock()
+
+        with (
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.resolving_view", return_value=cfg
+            ),
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.declare_resolution", mock_declare
+            ),
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.get_platform",
+                return_value=mock_platform,
+            ),
+        ):
+            apply_kimi_k3_linear_attn_defaults(MagicMock())
+
+        return mock_declare
+
+    @staticmethod
+    def _resolved_fields(mock_declare):
+        fields = {}
+        for call in mock_declare.call_args_list:
+            fields.update(call.kwargs)
+        return fields
+
+    def test_defaults_to_triton_on_bf16_sm100(self):
+        mock_declare = self._run_hook(
+            linear_attn_decode_backend=None,
+            mamba_ssm_dtype="bfloat16",
+            is_sm100=True,
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertEqual(fields.get("linear_attn_decode_backend"), "triton")
+
+    def test_skipped_when_backend_already_set(self):
+        mock_declare = self._run_hook(
+            linear_attn_decode_backend="recurrent_kda",
+            mamba_ssm_dtype="bfloat16",
+            is_sm100=True,
+        )
+        mock_declare.assert_not_called()
+
+    def test_skipped_when_dtype_not_bf16(self):
+        mock_declare = self._run_hook(
+            linear_attn_decode_backend=None,
+            mamba_ssm_dtype="fp16",
+            is_sm100=True,
+        )
+        mock_declare.assert_not_called()
+
+    def test_skipped_off_sm100(self):
+        mock_declare = self._run_hook(
+            linear_attn_decode_backend=None,
+            mamba_ssm_dtype="bfloat16",
+            is_sm100=False,
+        )
+        mock_declare.assert_not_called()
 
 
 if __name__ == "__main__":
