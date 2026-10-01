@@ -4162,5 +4162,186 @@ class TestDeepSeekV4DefaultsHook(CustomTestCase):
                     self._run_hook(speculative_algorithm=algo)
 
 
+import unittest
+from unittest.mock import MagicMock, patch
+
+
+class TestKimiK3SpecBackendDefaults(CustomTestCase):
+    """Tests for apply_kimi_k3_spec_backend_defaults."""
+
+    def _run_hook(self, is_sm100=True, **cfg_overrides):
+        from sglang.srt.arg_groups.kimi_k3_hook import (
+            apply_kimi_k3_spec_backend_defaults,
+        )
+
+        defaults = dict(
+            speculative_algorithm=None,
+            linear_attn_verify_backend=None,
+            speculative_draft_attention_backend=None,
+        )
+        defaults.update(cfg_overrides)
+        cfg = MagicMock(**defaults)
+        mock_platform = MagicMock(is_sm100=is_sm100)
+        mock_declare = MagicMock()
+
+        with (
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.resolving_view", return_value=cfg
+            ),
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.declare_resolution", mock_declare
+            ),
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.get_platform",
+                return_value=mock_platform,
+            ),
+        ):
+            apply_kimi_k3_spec_backend_defaults(MagicMock())
+
+        return mock_declare
+
+    @staticmethod
+    def _resolved_fields(mock_declare):
+        """Flatten every declare_resolution(...) call's kwargs into one dict."""
+        fields = {}
+        for call in mock_declare.call_args_list:
+            fields.update(call.kwargs)
+        return fields
+
+    def test_no_speculative_algorithm_is_a_noop(self):
+        mock_declare = self._run_hook(speculative_algorithm=None)
+        mock_declare.assert_not_called()
+
+    def test_draft_attention_backend_case_insensitive_for_dspark(self):
+        """DSPARK in any input casing triggers the trtllm_mha default on SM100."""
+        for algo in ("DSPARK", "dspark", "Dspark"):
+            with self.subTest(algo=algo):
+                mock_declare = self._run_hook(
+                    speculative_algorithm=algo,
+                    speculative_draft_attention_backend=None,
+                    is_sm100=True,
+                )
+                fields = self._resolved_fields(mock_declare)
+                self.assertEqual(
+                    fields.get("speculative_draft_attention_backend"), "trtllm_mha"
+                )
+
+    def test_non_dspark_algorithm_does_not_set_draft_backend(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="EAGLE",
+            speculative_draft_attention_backend=None,
+            is_sm100=True,
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertNotIn("speculative_draft_attention_backend", fields)
+
+    def test_dspark_draft_backend_skipped_off_sm100(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="DSPARK",
+            speculative_draft_attention_backend=None,
+            is_sm100=False,
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertNotIn("speculative_draft_attention_backend", fields)
+
+    def test_dspark_does_not_override_explicit_draft_backend(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="DSPARK",
+            speculative_draft_attention_backend="flashinfer",
+            is_sm100=True,
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertNotIn("speculative_draft_attention_backend", fields)
+
+    def test_verify_backend_defaults_to_nv_cutedsl(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="EAGLE", linear_attn_verify_backend=None
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertEqual(fields.get("linear_attn_verify_backend"), "nv_cutedsl")
+
+    def test_verify_backend_not_overridden_if_already_set(self):
+        mock_declare = self._run_hook(
+            speculative_algorithm="EAGLE",
+            linear_attn_verify_backend="some_other_backend",
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertNotIn("linear_attn_verify_backend", fields)
+
+
+class TestKimiK3LinearAttnDefaults(CustomTestCase):
+    """Tests for apply_kimi_k3_linear_attn_defaults."""
+
+    def _run_hook(self, is_sm100=True, **cfg_overrides):
+        from sglang.srt.arg_groups.kimi_k3_hook import (
+            apply_kimi_k3_linear_attn_defaults,
+        )
+
+        defaults = dict(
+            linear_attn_decode_backend=None,
+            mamba_ssm_dtype="bfloat16",
+        )
+        defaults.update(cfg_overrides)
+        cfg = MagicMock(**defaults)
+        mock_platform = MagicMock(is_sm100=is_sm100)
+        mock_declare = MagicMock()
+
+        with (
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.resolving_view", return_value=cfg
+            ),
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.declare_resolution", mock_declare
+            ),
+            patch(
+                "sglang.srt.arg_groups.kimi_k3_hook.get_platform",
+                return_value=mock_platform,
+            ),
+        ):
+            apply_kimi_k3_linear_attn_defaults(MagicMock())
+
+        return mock_declare
+
+    @staticmethod
+    def _resolved_fields(mock_declare):
+        fields = {}
+        for call in mock_declare.call_args_list:
+            fields.update(call.kwargs)
+        return fields
+
+    def test_defaults_to_triton_on_bf16_sm100(self):
+        mock_declare = self._run_hook(
+            linear_attn_decode_backend=None,
+            mamba_ssm_dtype="bfloat16",
+            is_sm100=True,
+        )
+        fields = self._resolved_fields(mock_declare)
+        self.assertEqual(fields.get("linear_attn_decode_backend"), "triton")
+
+    def test_skipped_when_backend_already_set(self):
+        mock_declare = self._run_hook(
+            linear_attn_decode_backend="recurrent_kda",
+            mamba_ssm_dtype="bfloat16",
+            is_sm100=True,
+        )
+        mock_declare.assert_not_called()
+
+    def test_skipped_when_dtype_not_bf16(self):
+        mock_declare = self._run_hook(
+            linear_attn_decode_backend=None,
+            mamba_ssm_dtype="fp16",
+            is_sm100=True,
+        )
+        mock_declare.assert_not_called()
+
+    def test_skipped_off_sm100(self):
+        mock_declare = self._run_hook(
+            linear_attn_decode_backend=None,
+            mamba_ssm_dtype="bfloat16",
+            is_sm100=False,
+        )
+        mock_declare.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,7 +40,7 @@ def apply_kimi_k3_spec_backend_defaults(server_args: ServerArgs) -> None:
     # dspark's draft is dense MQA; trtllm_mha avoids flashinfer's blocking
     # per-step host plan. DSPARK-only: other spec algos use MLA-family drafts.
     if (
-        cfg.speculative_algorithm == "DSPARK"
+        cfg.speculative_algorithm.upper() == "DSPARK"
         and cfg.speculative_draft_attention_backend is None
         and get_platform().is_sm100
     ):
