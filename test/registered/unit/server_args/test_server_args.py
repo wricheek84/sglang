@@ -4102,11 +4102,13 @@ class TestLazyReexports(CustomTestCase):
         with self.assertRaises(AttributeError):
             server_args_module.NotAThing
 
+
 class TestDeepSeekV4DefaultsHook(CustomTestCase):
     """Tests for apply_deepseek_v4_defaults algorithm validation and topk enforcement."""
 
     def _run_hook(self, **cfg_overrides):
         from unittest.mock import MagicMock, patch
+
         from sglang.srt.arg_groups.deepseek_v4_hook import apply_deepseek_v4_defaults
 
         defaults = dict(
@@ -4120,9 +4122,13 @@ class TestDeepSeekV4DefaultsHook(CustomTestCase):
         defaults.update(cfg_overrides)
         cfg = MagicMock(**defaults)
 
-        with patch(
-            "sglang.srt.arg_groups.deepseek_v4_hook.resolving_view", return_value=cfg
-        ), patch("sglang.srt.arg_groups.deepseek_v4_hook.run_post_process_pass"):
+        with (
+            patch(
+                "sglang.srt.arg_groups.deepseek_v4_hook.resolving_view",
+                return_value=cfg,
+            ),
+            patch("sglang.srt.arg_groups.deepseek_v4_hook.run_post_process_pass"),
+        ):
             apply_deepseek_v4_defaults(MagicMock(), "DeepseekV4ForCausalLM")
 
     def test_no_speculative_algorithm_is_a_noop(self):
@@ -4154,6 +4160,7 @@ class TestDeepSeekV4DefaultsHook(CustomTestCase):
             with self.subTest(algo=algo):
                 with self.assertRaisesRegex(AssertionError, "Only EAGLE and DSPARK"):
                     self._run_hook(speculative_algorithm=algo)
-                    
+
+
 if __name__ == "__main__":
     unittest.main()
