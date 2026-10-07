@@ -173,10 +173,6 @@ def check_lora_speculative_compatibility(server_args: Any):
     )
     if speculative_algorithm in ("NGRAM", None):
         return
-    
-
-    
-
 
     # These algorithms present a uniform per-request token width during
     # verify, which is what the LoRA segment layout assumes.

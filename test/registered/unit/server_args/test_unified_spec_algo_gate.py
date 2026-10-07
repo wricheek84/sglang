@@ -79,7 +79,9 @@ class TestUnifiedSpecAlgoGate(unittest.TestCase):
             with self.subTest(spec_algo=algo):
                 with self.assertRaises(AssertionError) as ctx:
                     _run_handler(unified=True, spec_algo=algo)
-                self.assertIn("only supports --speculative-algorithm DSPARK", str(ctx.exception))
+                self.assertIn(
+                    "only supports --speculative-algorithm DSPARK", str(ctx.exception)
+                )
 
     def test_dspark_invalid_topk_rejected(self):
         """DSPARK under unified memory requires linear draft chain (topk in {None, 1})."""
