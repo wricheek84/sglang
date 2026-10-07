@@ -476,13 +476,18 @@ def handle_unified_memory_pool(server_args: Any) -> None:
             "--enable-unified-memory with PD disaggregation does not yet support "
             "--disaggregation-decode-enable-offload-kvcache."
         )
-    assert cfg.speculative_algorithm in (None, "DSPARK"), (
+    speculative_algorithm = (
+        cfg.speculative_algorithm.upper()
+        if cfg.speculative_algorithm is not None
+        else None
+    )
+    assert speculative_algorithm in (None, "DSPARK"), (
         "--enable-unified-memory only supports --speculative-algorithm "
         "DSPARK (chain draft); other speculative algorithms are not yet "
         "audited for the unified pool's virtual/kernel-facing loc translation. Got "
         f"--speculative-algorithm={cfg.speculative_algorithm!r}."
     )
-    if cfg.speculative_algorithm == "DSPARK":
+    if speculative_algorithm == "DSPARK":
         assert cfg.speculative_eagle_topk in (None, 1), (
             "--enable-unified-memory + DSPARK supports a linear draft "
             "chain only (--speculative-eagle-topk in {None, 1}); tree "

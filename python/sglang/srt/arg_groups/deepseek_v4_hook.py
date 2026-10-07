@@ -94,13 +94,14 @@ def apply_deepseek_v4_defaults(server_args: ServerArgs, model_arch: str) -> None
         )
 
     if cfg.speculative_algorithm is not None:
-        assert cfg.speculative_algorithm in (
+        spec_algo = cfg.speculative_algorithm.upper()
+        assert spec_algo in (
             "EAGLE",
             "DSPARK",
         ), (
             f"Only EAGLE and DSPARK speculative algorithms are supported for {model_arch}"
         )
-        if cfg.speculative_algorithm == "EAGLE":
+        if spec_algo == "EAGLE":
             assert cfg.speculative_eagle_topk == 1, (
                 f"Only EAGLE speculative algorithm with topk == 1 is supported for {model_arch}"
             )

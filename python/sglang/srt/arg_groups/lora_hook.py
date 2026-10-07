@@ -166,17 +166,22 @@ def check_lora_speculative_compatibility(server_args: Any):
     Matches resolved algorithm names (NEXTN has collapsed to EAGLE).
     """
     cfg = resolving_view(server_args)
-    if cfg.speculative_algorithm in ["NGRAM", None]:
+    speculative_algorithm = (
+        cfg.speculative_algorithm.upper()
+        if cfg.speculative_algorithm is not None
+        else None
+    )
+    if speculative_algorithm in ("NGRAM", None):
         return
 
     # These algorithms present a uniform per-request token width during
     # verify, which is what the LoRA segment layout assumes.
     lora_spec_algorithms = ("EAGLE", "EAGLE3", "DFLASH", "DSPARK")
-    if cfg.speculative_algorithm not in lora_spec_algorithms:
+    if speculative_algorithm not in lora_spec_algorithms:
         promoted = (
             " (NEXTN/EAGLE with a Gemma4 assistant draft is automatically "
             "promoted to FROZEN_KV_MTP, which does not support LoRA)"
-            if cfg.speculative_algorithm == "FROZEN_KV_MTP"
+            if speculative_algorithm == "FROZEN_KV_MTP"
             else ""
         )
         raise ValueError(
@@ -191,7 +196,7 @@ def check_lora_speculative_compatibility(server_args: Any):
     # prefix so the message names the combination, not just the flag.
     unsupported = [
         (
-            cfg.speculative_algorithm == "DSPARK" and ragged_mode != "static",
+            speculative_algorithm == "DSPARK" and ragged_mode != "static",
             f"does not support SGLANG_RAGGED_VERIFY_MODE={ragged_mode!r}: "
             "the per-request verify lengths it schedules break the "
             "uniform-width LoRA segment layout",
